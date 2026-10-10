@@ -1,0 +1,6 @@
+{
+  "name": "session-status-panel",
+  "version": "0.1.0",
+  "description": "右側面板：列出最近 72 小時用過的 session，顯示手動狀態、git 狀態與備註",
+  "types": "./types/index.d.ts"
+}

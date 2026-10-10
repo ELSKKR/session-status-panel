@@ -1,0 +1,33 @@
+# session-status-panel
+
+English: A Claude Code mod with a side panel listing the sessions you used in the last 72 hours, with manual status, git state and notes. Traditional Chinese UI only for now; English is on the to-do list.
+
+右側面板：列出最近 72 小時用過的 session，顯示手動狀態、git 狀態與備註。用 `/sessions` 開啟。
+
+## 選配：在 cache-meter 加「sessions 狀態」按鈕
+
+如果你也裝了 [cache-meter](https://github.com/ELSKKR/cache-meter)，可以套用 `patches/cache-meter-sessions-button.patch`，在它的那一列加一顆按鈕：
+
+```bash
+cd ~/.claude/mods/cache-meter
+patch -p1 < ~/.claude/mods/session-status-panel/patches/cache-meter-sessions-button.patch
+```
+
+套用前請先備份 cache-meter。
+
+## 安裝
+
+1. 下載到 Claude Code 的 mods 資料夾：
+
+```bash
+git clone https://github.com/ELSKKR/session-status-panel.git ~/.claude/mods/session-status-panel
+```
+
+2. 在 `~/.claude/settings.json` 的 `CLAUDE_CODE_PLUGIN_DIRS` 加入這個資料夾路徑（會長期保留的設定，改之前請先備份）。
+3. 重新開一個新 session。
+
+驗證：`claude plugin test ~/.claude/mods/session-status-panel`
+
+## 授權
+
+MIT

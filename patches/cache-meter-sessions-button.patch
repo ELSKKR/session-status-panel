@@ -1,0 +1,104 @@
+--- a/hooks/register.tsx
++++ b/hooks/register.tsx
+@@ -42,10 +42,12 @@
+ // ponytail: 多個 session 同時寫入可能蓋掉彼此一次，下一次回應會再寫回；要完全不漏需改成每個 session 一個 key
+ const CONTEXT_STORE_KEY = 'sessionContext'
+ 
+-// 這一列最右邊的按鈕：/handoff → /clear → 把交接內容填進輸入框（不送出）
++// 這一列最右邊的按鈕：按下去執行 session-status-panel 這個 mod 的 /sessions 指令
++const SESSIONS_BUTTON_LABEL = 'sessions 狀態'
++// 它左邊的按鈕：/handoff → /clear → 把交接內容填進輸入框（不送出）
+ const HANDOFF_BUTTON_LABEL = 'handoff'
+-// 要從文字可用的寬度扣掉的格數：按鈕的文字寬度 + 終端機畫成 [ 文字 ] 的框線 4 格 + 與左邊的間隔 1 格
+-const BUTTONS_RESERVE = displayWidth(HANDOFF_BUTTON_LABEL) + 4 + 1
++// 要從文字可用的寬度扣掉的格數：每顆按鈕的文字寬度 + 終端機畫成 [ 文字 ] 的框線 4 格 + 與左邊的間隔 1 格
++const BUTTONS_RESERVE = displayWidth(SESSIONS_BUTTON_LABEL) + 4 + 1 + displayWidth(HANDOFF_BUTTON_LABEL) + 4 + 1
+ // /handoff 那一輪最多等多久；超過就放棄，不 /clear
+ // ponytail: 固定 15 分鐘，交接常超過這個時間再改成設定值
+ const HANDOFF_TIMEOUT_MS = 15 * 60_000
+@@ -258,6 +260,15 @@
+                 void runHandoff($)
+               }}
+             />
++            <Text> </Text>
++            <Button
++              key="sessions-status"
++              label={SESSIONS_BUTTON_LABEL}
++              dimColor
++              onPress={() => {
++                void $.command.run({ command: 'sessions' }).catch(() => $.ui.toast('sessions 狀態：session-status-panel 沒有載入'))
++              }}
++            />
+           </Box>
+         </Box>
+         {below}
+--- a/tests/render.test.ts
++++ b/tests/render.test.ts
+@@ -75,6 +75,7 @@
+   }
+ })
+ 
++// ---- sessions 狀態按鈕 ----
+ const METER_FOR_BUTTON = {
+   sessionKey: '1', ttl: '1h', lastCacheAt: 0, toastedFor: null, isTurnRunning: false,
+   contextPercent: 80,
+@@ -82,6 +83,45 @@
+   isUsageStale: false,
+ }
+ 
++test('「sessions 狀態」按鈕：畫在這一列，原有各段不變；窄寬度時先少放文字段落，按鈕留著', async ($, on) => {
++  const values = new Map<string, unknown>([['meter', METER_FOR_BUTTON], ['now', 10 * 60_000]])
++  on('state.get', async (_$, e) => ({ value: { value: values.get(e.key) ?? null, version: 1 } }))
++  // 代替下層 mod
++  on('ui.render', ($e, e) => {
++    const { Text } = $e.ui.resolve(e)
++    return h(Text, {}, 'beneath')
++  })
++  for (const surface of ['terminal', 'desktop'] as const) {
++    const wide = await $.ui.mount({ plugin: 'cache-meter', surface, ...BAND })
++    expect(await wide.find({ type: 'Button', props: { label: 'sessions 狀態' } })).toBeDefined()
++    expect(await wide.find({ type: 'Text', text: /^Cache 50:00$/ })).toBeDefined()
++    expect(await wide.find({ type: 'Text', text: /^ctx 80%$/ })).toBeDefined()
++    await wide.unmount()
++
++    const narrow = await $.ui.mount({
++      plugin: 'cache-meter', surface, ...BAND, props: { ...BAND.props, bodyColumns: 30 },
++    })
++    expect(await narrow.find({ type: 'Button', props: { label: 'sessions 狀態' } })).toBeDefined()
++    expect(await narrow.find({ type: 'Text', text: /^Cache 50:00$/ })).toBeDefined()
++    expect(await narrow.find({ type: 'Text', text: /^ctx / })).toBeUndefined()
++    await narrow.unmount()
++  }
++})
++
++test('「sessions 狀態」按鈕：session-status-panel 沒載入時按下去不會出錯', async ($, on) => {
++  const values = new Map<string, unknown>([['meter', METER_FOR_BUTTON], ['now', 10 * 60_000]])
++  on('state.get', async (_$, e) => ({ value: { value: values.get(e.key) ?? null, version: 1 } }))
++  // 代替下層 mod
++  on('ui.render', ($e, e) => {
++    const { Text } = $e.ui.resolve(e)
++    return h(Text, {}, 'beneath')
++  })
++  const ui = await $.ui.mount({ plugin: 'cache-meter', surface: 'desktop', ...BAND })
++  await ui.press({ plugin: 'cache-meter', key: 'sessions-status' })
++  expect(await ui.find({ type: 'Text', text: /^Cache 50:00$/ })).toBeDefined()
++  await ui.unmount()
++})
++
+ // ---- handoff 按鈕 ----
+ type HandoffWorld = {
+   isTurnRunning?: boolean
+@@ -147,11 +187,12 @@
+   }
+ }
+ 
+-test('handoff 按鈕：窄寬度時留著', async ($, on) => {
++test('handoff 按鈕：在「sessions 狀態」旁邊，窄寬度時兩顆都留著', async ($, on) => {
+   fakeWorld(on, {})
+   for (const surface of ['terminal', 'desktop'] as const) {
+     const narrow = await $.ui.mount({ plugin: 'cache-meter', surface, ...BAND, props: { ...BAND.props, bodyColumns: 30 } })
+     expect(await narrow.find({ type: 'Button', props: { label: 'handoff' } })).toBeDefined()
++    expect(await narrow.find({ type: 'Button', props: { label: 'sessions 狀態' } })).toBeDefined()
+     expect(await narrow.find({ type: 'Text', text: /^Cache 50:00$/ })).toBeDefined()
+     await narrow.unmount()
+   }
