@@ -12,11 +12,14 @@ export type GitState =
   | { kind: 'notGit' }
   | { kind: 'missingFolder' }
 
-/** 使用者在 $.store 留下的資料：手動狀態、備註、是否隱藏、session 啟動時登記的時間 */
+/** 使用者在 $.store 留下的資料：手動狀態、備註、是否追蹤、session 啟動時登記的時間 */
 export type UserEntry = {
   status: ManualStatus
   note: string
+  /** 改版前的「隱藏」；現在改看 tracked，只用來判斷舊資料 */
   hidden: boolean
+  /** 使用者回答過「要追蹤嗎」才有值；沒有值時由 isTracked 推斷 */
+  tracked?: boolean
   lastSeen?: number
 }
 
@@ -45,6 +48,8 @@ declare module 'claude-code' {
       message: string
       /** 按下 commit 類按鈕後，各列顯示的提示（key 是紀錄檔編號）；重新整理時清掉 */
       notices: Record<string, string>
+      /** 正在編輯的那一列的紀錄檔編號；空字串表示沒有 */
+      editing: string
     }
   }
 }

@@ -70,7 +70,7 @@ test('面板：打開「顯示已隱藏」後，被隱藏的列也會畫出來�
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'session-status-panel', surface, ...PANE })
     expect(await ui.find({ type: 'Text', text: /被隱藏的 session/ })).toBeDefined()
-    expect(await ui.find({ type: 'Button', props: { label: '取消隱藏' } })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /（未追蹤）/ })).toBeDefined()
     await ui.unmount()
   }
 })
@@ -86,13 +86,13 @@ test('面板：沒有資料時顯示說明文字；掃描中的訊息會顯示',
   on('state.get', async (_$, e) => ({ value: { value: values.get(e.key) ?? null, version: 1 } }))
 
   const ui = await $.ui.mount({ plugin: 'session-status-panel', surface: 'desktop', ...PANE })
-  expect(await ui.find({ type: 'Text', text: /最近 72 小時沒有用過的 session/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /最近 72 小時沒有追蹤中的 session/ })).toBeDefined()
   await ui.unmount()
 
   values.set('message', '掃描中…')
   const scanning = await $.ui.mount({ plugin: 'session-status-panel', surface: 'desktop', ...PANE })
   expect(await scanning.find({ type: 'Text', text: /掃描中/ })).toBeDefined()
-  expect(await scanning.find({ type: 'Text', text: /沒有用過的 session/ })).toBeUndefined()
+  expect(await scanning.find({ type: 'Text', text: /沒有追蹤中的 session/ })).toBeUndefined()
   await scanning.unmount()
 })
 
@@ -119,18 +119,33 @@ test('操作：選手動狀態、輸入備註、按隱藏，都會寫回狀態�
 
   const ui = await $.ui.mount({ plugin: 'session-status-panel', surface: 'desktop', ...PANE })
 
-  await ui.select({ plugin: 'session-status-panel', key: 'status:a-new', value: 'finished' })
+  // 平常看不到選單與輸入框，按「編輯」才展開
+  expect(await ui.find({ type: 'Select', key: 'status:a-new' })).toBeUndefined()
+  expect(await ui.find({ type: 'Input', key: 'note:a-new' })).toBeUndefined()
+  await ui.press({ plugin: 'session-status-panel', key: 'edit:a-new' })
+  expect(values.get('editing')).toBe('a-new')
+  await ui.unmount()
+
+  const editA = await $.ui.mount({ plugin: 'session-status-panel', surface: 'desktop', ...PANE })
+  await editA.select({ plugin: 'session-status-panel', key: 'status:a-new', value: 'finished' })
+  await editA.unmount()
   expect((values.get('user') as Record<string, { status: string }>)['a-new'].status).toBe('finished')
 
-  await ui.input({ plugin: 'session-status-panel', key: 'note:b-mid', text: '卡在動畫狀態機', kind: 'submit' })
+  values.set('editing', 'b-mid')
+  const editB = await $.ui.mount({ plugin: 'session-status-panel', surface: 'desktop', ...PANE })
+  await editB.input({ plugin: 'session-status-panel', key: 'note:b-mid', text: '卡在動畫狀態機', kind: 'submit' })
   expect((values.get('user') as Record<string, { note: string }>)['b-mid'].note).toBe('卡在動畫狀態機')
 
-  await ui.press({ plugin: 'session-status-panel', key: 'hide:c-old' })
-  const afterHide = values.get('user') as Record<string, { hidden: boolean; note: string }>
-  expect(afterHide['c-old'].hidden).toBe(true)
+  await editB.unmount()
+
+  values.set('editing', 'c-old')
+  const editC = await $.ui.mount({ plugin: 'session-status-panel', surface: 'desktop', ...PANE })
+  await editC.press({ plugin: 'session-status-panel', key: 'track:c-old' })
+  const afterHide = values.get('user') as Record<string, { tracked: boolean; note: string }>
+  expect(afterHide['c-old'].tracked).toBe(false)
   expect(afterHide['c-old'].note).toBe('可以封存')
 
-  await ui.unmount()
+  await editC.unmount()
 })
 
 test('session 啟動：註冊 /sessions 指令，並把這個 session 的 lastSeen 存進 $.store', async ($, on) => {
@@ -293,7 +308,7 @@ const V2_ROWS = [
 function v2State(on: Parameters<Parameters<typeof test>[1]>[1]) {
   const values = new Map<string, unknown>([
     ['rows', V2_ROWS],
-    ['user', {}],
+    ['user', { dirty: { tracked: true }, ahead: { tracked: true }, clean: { tracked: true } }],
     ['showHidden', false],
     ['message', ''],
     ['notices', {}],
@@ -372,4 +387,47 @@ test('按 push（沒有 app 編號）：只複製文字，提示請使用者自�
   const notices = values.get('notices') as Record<string, string>
   expect(notices.ahead).toBe('已複製 push 要求：請自己打開該 session，按 Ctrl+V、Enter 送出')
   await ui.unmount()
+})
+
+test('自己這個 session 沒回答過：面板頂端問要不要追蹤，按「追蹤」寫回 tracked', async ($, on) => {
+  const { values } = v2State(on)
+  values.set('user', {})
+  const stored = new Map<string, unknown>()
+  on('session.id', async () => ({ value: 'dirty' }))
+  on('store.get', async (_$, e) => ({ value: stored.get(e.key) }))
+  on('store.set', async (_$, e) => {
+    stored.set(e.key, e.value)
+    return { value: undefined }
+  })
+  const ui = await $.ui.mount({ plugin: 'session-status-panel', surface: 'desktop', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /要追蹤這個 session 嗎/ })).toBeDefined()
+  // 未追蹤的列預設不畫
+  expect(await ui.find({ type: 'Button', key: 'open:dirty' })).toBeUndefined()
+  await ui.press({ plugin: 'session-status-panel', key: 'track-self' })
+  expect((values.get('user') as Record<string, { tracked?: boolean }>).dirty.tracked).toBe(true)
+  expect((stored.get('sessions') as Record<string, { tracked?: boolean }>).dirty.tracked).toBe(true)
+  await ui.unmount()
+
+  const again = await $.ui.mount({ plugin: 'session-status-panel', surface: 'desktop', ...PANE })
+  expect(await again.find({ type: 'Text', text: /要追蹤這個 session 嗎/ })).toBeUndefined()
+  expect(await again.find({ type: 'Button', key: 'open:dirty' })).toBeDefined()
+  await again.unmount()
+})
+
+test('依開發進度分組：每組有小標題與數量，每列都有按鈕', async ($, on) => {
+  const { values } = v2State(on)
+  values.set('user', {
+    dirty: { tracked: true, status: 'developing', note: '', hidden: false },
+    ahead: { tracked: true, status: 'paused', note: '', hidden: false },
+    clean: { tracked: true, status: 'unmarked', note: '', hidden: false },
+  })
+  const drawn = await $.ui.mount({ plugin: 'session-status-panel', surface: 'desktop', ...PANE })
+  expect(await drawn.find({ type: 'Button', key: 'commit:dirty' })).toBeDefined()
+  expect(await drawn.find({ type: 'Button', key: 'edit:clean' })).toBeDefined()
+  expect(await drawn.find({ type: 'Text', text: /開發中（1）/ })).toBeDefined()
+  expect(await drawn.find({ type: 'Text', text: /開發暫停（1）/ })).toBeDefined()
+  expect(await drawn.find({ type: 'Text', text: /未標記（1）/ })).toBeDefined()
+  // 排版已定案，不再有切換鈕
+  expect(await drawn.find({ type: 'Button', key: 'layout:1' })).toBeUndefined()
+  await drawn.unmount()
 })

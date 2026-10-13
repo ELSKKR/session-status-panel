@@ -5,10 +5,13 @@ import type { GitState, ManualStatus, Row, UserData } from '../types'
 import { findToplevel, gitLabels, judgeSession, readRepoFacts } from './lib/gitState'
 import type { EditedFile, RepoFacts } from './lib/gitState'
 import {
+  defaultEntry,
   isStatus,
+  isTracked,
   mergeEntry,
   parseUserData,
   pickEntry,
+  shouldAskTracking,
   sortRows,
   STATUS_ORDER,
   statusColor,
@@ -42,6 +45,10 @@ const userAtom = atom({ plugin: 'session-status-panel', key: 'user' } as const, 
 const showHiddenAtom = atom({ plugin: 'session-status-panel', key: 'showHidden' } as const, false)
 const messageAtom = atom({ plugin: 'session-status-panel', key: 'message' } as const, '')
 const noticesAtom = atom({ plugin: 'session-status-panel', key: 'notices' } as const, {})
+const editingAtom = atom({ plugin: 'session-status-panel', key: 'editing' } as const, '')
+
+// 分組的順序：正在做的在上
+const GROUP_ORDER: ManualStatus[] = ['developing', 'paused', 'finished', 'unmarked']
 
 // 寫入 $.store 一律排隊，一筆做完才做下一筆，避免兩次寫入互相蓋掉
 // ponytail: 只排本 session 內的寫入；兩個 session 同一瞬間寫入仍可能蓋掉其中一筆，下次重新整理會讀到實際內容
@@ -299,31 +306,58 @@ export const register: Register = on => {
     const showHidden = await read($, showHiddenAtom)
     const message = await read($, messageAtom)
     const notices = await read($, noticesAtom)
+    const editing = await read($, editingAtom)
+    const ownId = await $.session.id().catch(() => '')
 
     const shown = sortRows(visibleRows(rows, userData, showHidden))
     const hiddenCount = rows.length - visibleRows(rows, userData, false).length
 
-    let toggleLabel = '顯示已隱藏（' + hiddenCount + '）'
+    let toggleLabel = '顯示未追蹤（' + hiddenCount + '）'
     if (showHidden) {
-      toggleLabel = '收起已隱藏（' + hiddenCount + '）'
+      toggleLabel = '收起未追蹤（' + hiddenCount + '）'
     }
 
     const statusOptions = STATUS_ORDER.map(status => ({ value: status, label: statusLabel(status) }))
 
-    const rowElements = []
-    for (const row of shown) {
-      // 同一個對話的複本共用資料：自己沒標過，就用複本標過的
+    // 這個 session 自己的列（/clear 後自己的編號是新的，可能是某一列的複本）
+    let ownRow: Row | undefined = undefined
+    for (const row of rows) {
+      if (row.sessionId === ownId || row.familyIds.includes(ownId)) {
+        ownRow = row
+      }
+    }
+    let ownEntry = userData[ownId] ?? defaultEntry()
+    let ownKey = ownId
+    if (ownRow !== undefined) {
+      ownEntry = pickEntry(userData, ownRow)
+      ownKey = ownRow.sessionId
+    }
+    let askElement = null
+    if (ownId !== '' && shouldAskTracking(ownEntry)) {
+      askElement = (
+        <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1}>
+          <Text>要追蹤這個 session 嗎？</Text>
+          <Box flexDirection="row" gap={1}>
+            <Button key="track-self" label="追蹤" variant="primary" onPress={() => void saveEntry($, ownKey, { tracked: true })} />
+            <Button key="untrack-self" label="不追蹤" onPress={() => void saveEntry($, ownKey, { tracked: false })} />
+          </Box>
+        </Box>
+      )
+    }
+
+    /** 一列裡會用到的零件 */
+    function parts(row: Row) {
       const entry = pickEntry(userData, row)
       const status: ManualStatus = entry.status
-      const note = entry.note
-      const isHidden = entry.hidden
+      const tracked = isTracked(entry)
       const labels = gitLabels(row.git)
+      const isEditing = editing === row.sessionId
 
       // 名稱：找得到 app 編號就畫成按鈕，按下讓 app 切到那個 session；找不到就是一般文字
-      let nameElement = <Text bold wrap="truncate">{row.name}</Text>
+      let name = <Text bold wrap="truncate">{row.name}</Text>
       const appId = row.appId
       if (typeof appId === 'string') {
-        nameElement = (
+        name = (
           <Button
             key={'open:' + row.sessionId}
             label={row.name}
@@ -334,11 +368,22 @@ export const register: Register = on => {
           />
         )
       }
+      let untrackedMark = null
+      if (!tracked) {
+        untrackedMark = <Text dimColor>（未追蹤）</Text>
+      }
 
-      // commit 類按鈕：依 git 狀態決定出現哪些
-      const actionElements = []
+      const git = (
+        <Box flexDirection="row" gap={1}>
+          <Text color={labels.commitColor}>{labels.commitText}</Text>
+          <Text color={labels.pushColor}>{labels.pushText}</Text>
+        </Box>
+      )
+
+      // 按鈕固定靠右，順序：git 按鈕 → 編輯
+      const buttons = []
       for (const action of actionsFor(row.git)) {
-        actionElements.push(
+        buttons.push(
           <Button
             key={action.kind + ':' + row.sessionId}
             label={action.label}
@@ -348,79 +393,157 @@ export const register: Register = on => {
           />,
         )
       }
-      let noticeElement = null
-      const notice = notices[row.sessionId]
-      if (typeof notice === 'string' && notice !== '') {
-        noticeElement = <Text color="blue">{notice}</Text>
+      let editLabel = '編輯'
+      if (isEditing) {
+        editLabel = '完成'
       }
-
-      let hideLabel = '隱藏'
-      if (isHidden) {
-        hideLabel = '取消隱藏'
-      }
-
-      rowElements.push(
-        <Box key={'row:' + row.sessionId} flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-          <Box flexDirection="row" justifyContent="space-between" gap={1}>
-            {nameElement}
-            <Text color={statusColor(status)}>● {statusLabel(status)}</Text>
-          </Box>
-          <Box flexDirection="row" gap={1}>
-            <Text color={labels.commitColor}>{labels.commitText}</Text>
-            <Text color={labels.pushColor}>{labels.pushText}</Text>
-            {actionElements}
-          </Box>
-          {noticeElement}
-          <Select
-            key={'status:' + row.sessionId}
-            label="狀態"
-            options={statusOptions}
-            value={status}
-            onSelect={value => {
-              if (isStatus(value)) {
-                void saveEntry($, row.sessionId, { status: value })
+      buttons.push(
+        <Button
+          key={'edit:' + row.sessionId}
+          label={editLabel}
+          dimColor={!isEditing}
+          onPress={() => {
+            void update($, editingAtom, current => {
+              if (current === row.sessionId) {
+                return ''
               }
-            }}
-          />
-          <Input
-            key={'note:' + row.sessionId}
-            label="備註"
-            placeholder="在這裡寫備註"
-            value={note}
-            submitLabel="儲存"
-            onInput={value => {
-              void saveEntry($, row.sessionId, { note: value })
-            }}
-            onSubmit={value => {
-              void saveEntry($, row.sessionId, { note: value })
-            }}
-          />
-          <Button
-            key={'hide:' + row.sessionId}
-            label={hideLabel}
-            dimColor
-            onPress={() => {
-              void saveEntry($, row.sessionId, { hidden: !isHidden })
-            }}
-          />
-        </Box>,
+              return row.sessionId
+            })
+          }}
+        />,
+      )
+      const buttonBox = (
+        <Box flexDirection="row" gap={1}>
+          {buttons}
+        </Box>
+      )
+
+      let note = null
+      if (entry.note !== '') {
+        note = <Text dimColor wrap="truncate">備註：{entry.note}</Text>
+      }
+      let notice = null
+      const noticeText = notices[row.sessionId]
+      if (typeof noticeText === 'string' && noticeText !== '') {
+        notice = <Text color="blue">{noticeText}</Text>
+      }
+
+      let editor = null
+      if (isEditing) {
+        let trackLabel = '不追蹤'
+        if (!tracked) {
+          trackLabel = '追蹤'
+        }
+        editor = (
+          <Box flexDirection="column" paddingLeft={2}>
+            <Select
+              key={'status:' + row.sessionId}
+              label="狀態"
+              options={statusOptions}
+              value={status}
+              onSelect={value => {
+                if (isStatus(value)) {
+                  void saveEntry($, row.sessionId, { status: value })
+                }
+              }}
+            />
+            <Input
+              key={'note:' + row.sessionId}
+              label="備註"
+              placeholder="在這裡寫備註"
+              value={entry.note}
+              submitLabel="儲存"
+              onInput={value => {
+                void saveEntry($, row.sessionId, { note: value })
+              }}
+              onSubmit={value => {
+                void saveEntry($, row.sessionId, { note: value })
+              }}
+            />
+            <Box flexDirection="row">
+              <Button
+                key={'track:' + row.sessionId}
+                label={trackLabel}
+                dimColor
+                onPress={() => {
+                  void saveEntry($, row.sessionId, { tracked: !tracked })
+                }}
+              />
+            </Box>
+          </Box>
+        )
+      }
+      return { name, untrackedMark, git, buttonBox, note, notice, editor }
+    }
+
+    /** 一列往下疊，不往右排，面板窄也看得完：名稱／git 狀態／按鈕（靠右），三行 */
+    function stacked(row: Row) {
+      const p = parts(row)
+      return (
+        <Box key={'row:' + row.sessionId} flexDirection="column">
+          <Box flexDirection="row" gap={1}>
+            {p.name}
+            {p.untrackedMark}
+          </Box>
+          <Box flexDirection="column" paddingLeft={2}>
+            {p.git}
+            <Box flexDirection="row" justifyContent="flex-end">
+              {p.buttonBox}
+            </Box>
+            {p.note}
+            {p.notice}
+          </Box>
+          {p.editor}
+        </Box>
       )
     }
 
+    // 依開發進度分組，每組一個小標題；狀態讀不懂的放進「未標記」，不會整列消失
+    function groupOf(row: Row): ManualStatus {
+      const status = pickEntry(userData, row).status
+      if (typeof status === 'string' && isStatus(status)) {
+        return status
+      }
+      return 'unmarked'
+    }
+    const groups = []
+    for (const status of GROUP_ORDER) {
+      const members = shown.filter(row => groupOf(row) === status)
+      if (members.length === 0) {
+        continue
+      }
+      groups.push(
+        <Box key={'group:' + status} flexDirection="column" gap={1}>
+          <Text bold color={statusColor(status)}>
+            {'● ' + statusLabel(status) + '（' + members.length + '）'}
+          </Text>
+          <Box flexDirection="column" gap={1} paddingLeft={1}>
+            {members.map(stacked)}
+          </Box>
+        </Box>,
+      )
+    }
+    const listElement = (
+      <Box flexDirection="column" gap={1}>
+        {groups}
+      </Box>
+    )
+
     let emptyText = ''
     if (shown.length === 0 && message === '') {
-      emptyText = '最近 72 小時沒有用過的 session'
+      emptyText = '最近 72 小時沒有追蹤中的 session'
     }
 
     return (
       <Box flexDirection="column" gap={1}>
+        {askElement}
         <Box flexDirection="row" gap={1}>
           <Button key="refresh" label="重新整理" variant="primary" onPress={() => void refresh($)} />
           <Button key="toggle-hidden" label={toggleLabel} onPress={() => void update($, showHiddenAtom, value => !value)} />
         </Box>
         {message !== '' && <Text dimColor>{message}</Text>}
         {emptyText !== '' && <Text dimColor>{emptyText}</Text>}
-        {rowElements}
+        {listElement}
       </Box>
     )
   })

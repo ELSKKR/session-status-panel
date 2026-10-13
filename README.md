@@ -1,8 +1,10 @@
 # session-status-panel
 
-English: A Claude Code mod with a side panel listing the sessions you used in the last 72 hours, with manual status, git state and notes. Traditional Chinese UI only for now; English is on the to-do list.
+English: A Claude Code mod with a side panel listing the sessions you used in the last 72 hours, grouped by manual status, with git state and notes. It opens automatically; each session asks once whether to track it. Traditional Chinese UI only for now; English is on the to-do list.
 
-右側面板：列出最近 72 小時用過的 session，顯示手動狀態、git 狀態與備註。用 `/sessions` 開啟。
+右側面板：列出最近 72 小時用過的 session，依開發進度分組，顯示 git 狀態與備註。開 session 時自動開啟，也可以用 `/sessions` 開啟。
+
+新的 session 預設不追蹤，會在它自己的面板頂端問「要追蹤這個 session 嗎？」；按「追蹤」才會出現在清單上。狀態、備註、追蹤要按每列的「編輯」才會展開。
 
 ## 選配：在 cache-meter 加「sessions 狀態」按鈕
 

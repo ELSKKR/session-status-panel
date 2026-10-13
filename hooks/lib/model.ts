@@ -62,6 +62,9 @@ export function parseUserData(stored: unknown): UserData {
     if (typeof fields.hidden === 'boolean') {
       entry.hidden = fields.hidden
     }
+    if (typeof fields.tracked === 'boolean') {
+      entry.tracked = fields.tracked
+    }
     if (typeof fields.lastSeen === 'number') {
       entry.lastSeen = fields.lastSeen
     }
@@ -89,19 +92,38 @@ export function sortRows(rows: Row[]): Row[] {
   })
 }
 
-/** 隱藏的列預設不顯示；showHidden 打開時全部顯示 */
+/**
+ * 有沒有在追蹤：使用者回答過就照回答；
+ * 沒回答過的（改版前就有的資料）：被隱藏過的不追蹤，標過狀態或寫過備註的算追蹤，其他都不追蹤。
+ */
+export function isTracked(entry: UserEntry): boolean {
+  if (typeof entry.tracked === 'boolean') {
+    return entry.tracked
+  }
+  if (entry.hidden) {
+    return false
+  }
+  return entry.status !== 'unmarked' || entry.note !== ''
+}
+
+/** 要不要在這個 session 的面板頂端問「要追蹤嗎」：還沒回答過、而且目前不算追蹤 */
+export function shouldAskTracking(entry: UserEntry): boolean {
+  return entry.tracked === undefined && !isTracked(entry)
+}
+
+/** 預設只顯示追蹤中的列；showHidden 打開時全部顯示 */
 export function visibleRows(rows: Row[], data: UserData, showHidden: boolean): Row[] {
   if (showHidden) {
     return rows
   }
-  return rows.filter(row => pickEntry(data, row).hidden !== true)
+  return rows.filter(row => isTracked(pickEntry(data, row)))
 }
 
 function hasContent(entry: UserEntry | undefined): entry is UserEntry {
   if (entry === undefined) {
     return false
   }
-  return entry.status !== 'unmarked' || entry.note !== '' || entry.hidden
+  return entry.status !== 'unmarked' || entry.note !== '' || entry.hidden || entry.tracked !== undefined
 }
 
 /**

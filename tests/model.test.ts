@@ -3,9 +3,11 @@ import { expect, test } from 'claude-code/testing'
 import {
   AMBER,
   isStatus,
+  isTracked,
   mergeEntry,
   parseUserData,
   pickEntry,
+  shouldAskTracking,
   sortRows,
   statusColor,
   statusLabel,
@@ -35,7 +37,7 @@ test('同一個對話的複本共用資料：自己沒標過就用複本標過�
 })
 
 test('複本裡有一份被隱藏，最近的那份也算隱藏', async () => {
-  const data = parseUserData({ old: { status: 'finished', note: '', hidden: true } })
+  const data = parseUserData({ old: { status: 'finished', note: '', hidden: true }, other: { tracked: true } })
   const rows: Row[] = [{ ...makeRow('fresh', 9), familyIds: ['old'] }, makeRow('other', 8)]
   expect(visibleRows(rows, data, false).map(row => row.sessionId)).toEqual(['other'])
 })
@@ -87,10 +89,36 @@ test('排序：最近活動的在上；同時間依編號，結果固定', async
   expect(ties.map(row => row.sessionId)).toEqual(['a', 'b'])
 })
 
-test('隱藏：預設不顯示已隱藏的列；打開開關後全部顯示；隱藏不影響其他資料', async () => {
-  const rows = [makeRow('a', 3), makeRow('b', 2), makeRow('c', 1)]
-  const data = parseUserData({ b: { status: 'finished', note: '備註', hidden: true } })
+test('未追蹤：預設只顯示追蹤中的列；打開開關後全部顯示；不追蹤不影響其他資料', async () => {
+  const rows = [makeRow('a', 3), makeRow('b', 2), makeRow('c', 1), makeRow('new', 0)]
+  const data = parseUserData({
+    a: { tracked: true },
+    b: { status: 'finished', note: '備註', tracked: false },
+    c: { status: 'paused' },
+  })
   expect(visibleRows(rows, data, false).map(row => row.sessionId)).toEqual(['a', 'c'])
-  expect(visibleRows(rows, data, true).map(row => row.sessionId)).toEqual(['a', 'b', 'c'])
+  expect(visibleRows(rows, data, true).map(row => row.sessionId)).toEqual(['a', 'b', 'c', 'new'])
   expect(data.b.note).toBe('備註')
+})
+
+test('有沒有追蹤：回答過照回答；沒回答過的舊資料，標過狀態或寫過備註才算追蹤，被隱藏過的不算', async () => {
+  const data = parseUserData({
+    yes: { tracked: true },
+    no: { status: 'developing', tracked: false },
+    marked: { status: 'paused' },
+    noted: { note: 'x' },
+    hiddenOld: { status: 'paused', hidden: true },
+    blank: { lastSeen: 5 },
+  })
+  expect(isTracked(data.yes)).toBe(true)
+  expect(isTracked(data.no)).toBe(false)
+  expect(isTracked(data.marked)).toBe(true)
+  expect(isTracked(data.noted)).toBe(true)
+  expect(isTracked(data.hiddenOld)).toBe(false)
+  expect(isTracked(data.blank)).toBe(false)
+  // 只有沒回答過、又不算追蹤的才問
+  expect(shouldAskTracking(data.blank)).toBe(true)
+  expect(shouldAskTracking(data.hiddenOld)).toBe(true)
+  expect(shouldAskTracking(data.marked)).toBe(false)
+  expect(shouldAskTracking(data.no)).toBe(false)
 })
